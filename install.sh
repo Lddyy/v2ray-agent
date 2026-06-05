@@ -3808,6 +3808,11 @@ singBoxMergeConfig() {
 # 初始化sing-box端口
 initSingBoxPort() {
     local port=$1
+    # 兼容历史脏值：若读取到非数字端口（例如错误提示文本），则清空并重新走交互/随机逻辑
+    if [[ -n "${port}" ]] && { ! [[ "${port}" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); }; then
+        echoContent yellow " ---> 检测到历史端口异常，已忽略并重新生成"
+        port=
+    fi
     if [[ -n "${port}" && -z "${lastInstallationConfig}" ]]; then
         read -r -p "读取到上次使用的端口，是否使用 ？[y/n]:" historyPort
         if [[ "${historyPort}" != "y" ]]; then
@@ -3828,8 +3833,9 @@ initSingBoxPort() {
             allowPort "${port}" "udp"
             echo "${port}"
         else
-            echoContent red " ---> 端口输入错误"
-            exit 0
+            echoContent red " ---> 端口输入错误" 1>&2
+            initSingBoxPort ""
+            return $?
         fi
     fi
 }
@@ -4780,6 +4786,7 @@ initSubscribeLocalConfig() {
 }
 # 初始化TLS证书SHA256指纹
 # xray 2025.6.01后弃用allowInsecure，改用pinnedPeerCertSha256进行证书绑定
+# pinnedPeerCertSha256（xray/v2rayNG）使用hex编码；sing-box字段使用标准Base64。
 # 对所有类型证书（CA签发/自签）均计算指纹并注入订阅，避免手动操作；
 # 证书更新后重新生成订阅即可获得新指纹，客户端重新导入即可。
 # isSelfSignedCert 仅用于 ClashMeta 的 skip-cert-verify 判断（CA证书无需跳过验证）
@@ -4791,11 +4798,13 @@ initCertSha256() {
     if [[ ! -f "${certFile}" ]]; then
         return
     fi
-    # 对所有证书统一计算指纹：标准Base64（sing-box JSON用）和URL安全Base64（xray URL用）
+    # 对所有证书统一计算指纹：hex（xray URL用）和标准Base64（sing-box JSON用）
+    currentCertSha256=$(openssl x509 -in "${certFile}" -outform DER 2>/dev/null \
+        | openssl dgst -sha256 -hex 2>/dev/null \
+        | awk '{print $2}')
     currentCertSha256Std=$(openssl x509 -in "${certFile}" -outform DER 2>/dev/null \
         | openssl dgst -sha256 -binary 2>/dev/null \
         | base64 -w 0)
-    currentCertSha256=$(echo "${currentCertSha256Std}" | tr '+/' '-_' | tr -d '=')
     # 检测是否自签证书（issuer_hash==subject_hash），用于决定ClashMeta是否需要skip-cert-verify
     local issuerHash subjectHash
     issuerHash=$(openssl x509 -in "${certFile}" -noout -issuer_hash 2>/dev/null)

@@ -3865,6 +3865,7 @@ customCDNIP() {
 }
 # Initialize TLS certificate SHA256 fingerprint
 # Xray 2025.6.01+ deprecated allowInsecure; use pinnedPeerCertSha256 for cert pinning.
+# pinnedPeerCertSha256 (xray/v2rayNG) uses hex encoding; sing-box field uses standard Base64.
 # Fingerprint is computed for ALL cert types (CA-signed and self-signed) so clients
 # never need manual configuration. Re-generate subscriptions after cert renewal.
 # isSelfSignedCert is kept only for ClashMeta skip-cert-verify decision.
@@ -3876,11 +3877,13 @@ initCertSha256() {
     if [[ ! -f "${certFile}" ]]; then
         return
     fi
-    # Compute fingerprint for all certs: standard Base64 (sing-box JSON) and URL-safe Base64 (xray URLs)
+    # Compute fingerprint for all certs: hex (xray URLs) and standard Base64 (sing-box JSON)
+    currentCertSha256=$(openssl x509 -in "${certFile}" -outform DER 2>/dev/null \
+        | openssl dgst -sha256 -hex 2>/dev/null \
+        | awk '{print $2}')
     currentCertSha256Std=$(openssl x509 -in "${certFile}" -outform DER 2>/dev/null \
         | openssl dgst -sha256 -binary 2>/dev/null \
         | base64 -w 0)
-    currentCertSha256=$(echo "${currentCertSha256Std}" | tr '+/' '-_' | tr -d '=')
     # Detect self-signed cert (issuer_hash == subject_hash) for ClashMeta skip-cert-verify
     local issuerHash subjectHash
     issuerHash=$(openssl x509 -in "${certFile}" -noout -issuer_hash 2>/dev/null)
