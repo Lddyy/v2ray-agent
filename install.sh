@@ -4831,16 +4831,19 @@ defaultBase64Code() {
         echo [] >"/etc/v2ray-agent/subscribe_local/sing-box/${user}"
     fi
     local singBoxSubscribeLocalConfig=
-    # xray 2025.6后弃用allowInsecure，改用pinnedPeerCertSha256绑定证书指纹
+    # xray 2025.6后弃用allowInsecure，改用pcs（映射到pinnedPeerCertSha256）绑定证书指纹
     # 对所有直连TLS协议（非CDN/Reality）均注入指纹，避免客户端手动配置
     # ClashMeta 的 skip-cert-verify 仅对自签证书启用（CA证书无需跳过验证）
     local tlsPinnedParam=""
     local tlsPinnedParamEncode=""
+    local tlsInsecureParam="&insecure=0&allowInsecure=0"
+    local tlsInsecureParamEncode="%26insecure%3D0%26allowInsecure%3D0"
     local singBoxPinnedCertParam=""
     local clashSkipCertVerify=""
     if [[ -n "${currentCertSha256}" ]]; then
-        tlsPinnedParam="&pinnedPeerCertSha256=${currentCertSha256}"
-        tlsPinnedParamEncode="%26pinnedPeerCertSha256=${currentCertSha256}"
+        # v2rayNG/FmtBase 解析分享链接时读取 queryParam["pcs"] -> pinnedCA256
+        tlsPinnedParam="&pcs=${currentCertSha256}"
+        tlsPinnedParamEncode="%26pcs%3D${currentCertSha256}"
         singBoxPinnedCertParam=",\"pinned_peer_certificate_chain_sha256\":[\"${currentCertSha256Std}\"]"
         if [[ "${isSelfSignedCert}" == "true" ]]; then
             clashSkipCertVerify="    skip-cert-verify: true"
@@ -4849,12 +4852,12 @@ defaultBase64Code() {
     if [[ "${type}" == "vlesstcp" ]]; then
 
         echoContent yellow " ---> 通用格式(VLESS+TCP+TLS_Vision)"
-        echoContent green "    vless://${id}@${currentHost}:${port}?encryption=none&security=tls&fp=chrome&type=tcp&host=${currentHost}&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision${tlsPinnedParam}#${email}\n"
+        echoContent green "    vless://${id}@${currentHost}:${port}?encryption=none&security=tls&fp=chrome&type=tcp&host=${currentHost}&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision${tlsInsecureParam}${tlsPinnedParam}#${email}\n"
 
         echoContent yellow " ---> 格式化明文(VLESS+TCP+TLS_Vision)"
         echoContent green "协议类型:VLESS，地址:${currentHost}，端口:${port}，用户ID:${id}，安全:tls，client-fingerprint: chrome，传输方式:tcp，flow:xtls-rprx-vision，账户名:${email}\n"
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
-vless://${id}@${currentHost}:${port}?encryption=none&security=tls&type=tcp&host=${currentHost}&fp=chrome&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision${tlsPinnedParam}#${email}
+vless://${id}@${currentHost}:${port}?encryption=none&security=tls&type=tcp&host=${currentHost}&fp=chrome&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision${tlsInsecureParam}${tlsPinnedParam}#${email}
 EOF
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
   - name: "${email}"
@@ -4873,7 +4876,7 @@ EOF
         echo "${singBoxSubscribeLocalConfig}" | jq . >"/etc/v2ray-agent/subscribe_local/sing-box/${user}"
 
         echoContent yellow " ---> 二维码 VLESS(VLESS+TCP+TLS_Vision)"
-        echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3A%2F%2F${id}%40${currentHost}%3A${port}%3Fencryption%3Dnone%26fp%3Dchrome%26security%3Dtls%26type%3Dtcp%26${currentHost}%3D${currentHost}%26headerType%3Dnone%26sni%3D${currentHost}%26flow%3Dxtls-rprx-vision${tlsPinnedParamEncode}%23${email}\n"
+        echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3A%2F%2F${id}%40${currentHost}%3A${port}%3Fencryption%3Dnone%26fp%3Dchrome%26security%3Dtls%26type%3Dtcp%26${currentHost}%3D${currentHost}%26headerType%3Dnone%26sni%3D${currentHost}%26flow%3Dxtls-rprx-vision${tlsInsecureParamEncode}${tlsPinnedParamEncode}%23${email}\n"
 
     elif [[ "${type}" == "vmessws" ]]; then
         qrCodeBase64Default=$(echo -n "{\"port\":${port},\"ps\":\"${email}\",\"tls\":\"tls\",\"id\":\"${id}\",\"aid\":0,\"v\":2,\"host\":\"${currentHost}\",\"type\":\"none\",\"path\":\"${path}\",\"net\":\"ws\",\"add\":\"${add}\",\"method\":\"none\",\"peer\":\"${currentHost}\",\"sni\":\"${currentHost}\"}" | base64 -w 0)

@@ -3905,15 +3905,18 @@ defaultBase64Code() {
     local user=
     user=$(echo "${email}" | awk -F "[-]" '{print $1}')
     port=${currentDefaultPort}
-    # Inject pinnedPeerCertSha256 for all certs (xray 2025.6+ replacement for allowInsecure)
+    # Inject pcs (mapped to pinnedPeerCertSha256) for all certs (xray 2025.6+ replacement for allowInsecure)
     # ClashMeta skip-cert-verify is only set for self-signed certs (CA certs verify normally)
     local tlsPinnedParam=""
     local tlsPinnedParamEncode=""
+    local tlsInsecureParam="&insecure=0&allowInsecure=0"
+    local tlsInsecureParamEncode="%26insecure%3D0%26allowInsecure%3D0"
     local singBoxPinnedCertParam=""
     local clashSkipCertVerify=""
     if [[ -n "${currentCertSha256}" ]]; then
-        tlsPinnedParam="&pinnedPeerCertSha256=${currentCertSha256}"
-        tlsPinnedParamEncode="%26pinnedPeerCertSha256=${currentCertSha256}"
+        # v2rayNG/FmtBase parses share links with queryParam["pcs"] -> pinnedCA256
+        tlsPinnedParam="&pcs=${currentCertSha256}"
+        tlsPinnedParamEncode="%26pcs%3D${currentCertSha256}"
         singBoxPinnedCertParam=",\"pinned_peer_certificate_chain_sha256\":[\"${currentCertSha256Std}\"]"
         if [[ "${isSelfSignedCert}" == "true" ]]; then
             clashSkipCertVerify="    skip-cert-verify: true"
@@ -3924,12 +3927,12 @@ defaultBase64Code() {
 
         if [[ "${coreInstallType}" == "1" ]] && echo "${currentInstallProtocolType}" | grep -q 0; then
             echoContent yellow " ---> Universal format (VLESS+TCP+TLS_Vision)"
-            echoContent green " vless://${id}@${currentHost}:${currentDefaultPort}?encryption=none&security=tls&fp=chrome&type=tcp&host=${currentHost}&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision${tlsPinnedParam}#${email}\n"
+            echoContent green " vless://${id}@${currentHost}:${currentDefaultPort}?encryption=none&security=tls&fp=chrome&type=tcp&host=${currentHost}&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision${tlsInsecureParam}${tlsPinnedParam}#${email}\n"
 
             echoContent yellow " ---> Formatted plain text (VLESS+TCP+TLS_Vision)"
             echoContent green "Protocol type: VLESS, address: ${currentHost}, port: ${currentDefaultPort}, user ID: ${id}, security: tls, client-fingerprint: chrome, transmission method: tcp, flow: xtls-rprx -vision, account name:${email}\n"
             cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
-vless://${id}@${currentHost}:${currentDefaultPort}?encryption=none&security=tls&type=tcp&host=${currentHost}&fp=chrome&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision${tlsPinnedParam}#${email}
+vless://${id}@${currentHost}:${currentDefaultPort}?encryption=none&security=tls&type=tcp&host=${currentHost}&fp=chrome&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision${tlsInsecureParam}${tlsPinnedParam}#${email}
 EOF
             cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
   - name: "${email}"
@@ -3945,19 +3948,19 @@ EOF
 ${clashSkipCertVerify}
 EOF
             echoContent yellow " ---> QR code VLESS(VLESS+TCP+TLS_Vision)"
-            echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3A%2F%2F${id}%40${currentHost}%3A${currentDefaultPort}%3Fencryption%3Dnone%26fp%3Dchrome%26security%3Dtls%26type%3Dtcp%26${currentHost}%3D${currentHost}%26headerType%3Dnone%26sni%3D${currentHost}%26flow%3Dxtls-rprx-vision${tlsPinnedParamEncode}%23${email}\n"
+            echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3A%2F%2F${id}%40${currentHost}%3A${currentDefaultPort}%3Fencryption%3Dnone%26fp%3Dchrome%26security%3Dtls%26type%3Dtcp%26${currentHost}%3D${currentHost}%26headerType%3Dnone%26sni%3D${currentHost}%26flow%3Dxtls-rprx-vision${tlsInsecureParamEncode}${tlsPinnedParamEncode}%23${email}\n"
         elif [[ "${coreInstallType}" == 2 ]]; then
             echoContent yellow " ---> Universal format (VLESS+TCP+TLS)"
-            echoContent green "    vless://${id}@${currentHost}:${currentDefaultPort}?security=tls&encryption=none&host=${currentHost}&fp=chrome&headerType=none&type=tcp${tlsPinnedParam}#${email}\n"
+            echoContent green "    vless://${id}@${currentHost}:${currentDefaultPort}?security=tls&encryption=none&host=${currentHost}&fp=chrome&headerType=none&type=tcp${tlsInsecureParam}${tlsPinnedParam}#${email}\n"
 
             echoContent yellow " ---> Formatted plain text (VLESS+TCP+TLS)"
             echoContent green "Protocol type: VLESS, address: ${currentHost}, port: ${currentDefaultPort}, user ID: ${id}, security: tls, client-fingerprint: chrome, transmission method: tcp, account name: ${email}\n"
 
             cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
-vless://${id}@${currentHost}:${currentDefaultPort}?security=tls&encryption=none&host=${currentHost}&fp=chrome&headerType=none&type=tcp${tlsPinnedParam}#${email}
+vless://${id}@${currentHost}:${currentDefaultPort}?security=tls&encryption=none&host=${currentHost}&fp=chrome&headerType=none&type=tcp${tlsInsecureParam}${tlsPinnedParam}#${email}
 EOF
             echoContent yellow " ---> QR code VLESS(VLESS+TCP+TLS)"
-            echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3a%2f%2f${id}%40${currentHost}%3a${currentDefaultPort}%3fsecurity%3dtls%26encryption%3dnone%26fp%3Dchrome%26host%3d${currentHost}%26headerType%3dnone%26type%3dtcp${tlsPinnedParamEncode}%23${email}\n"
+            echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3a%2f%2f${id}%40${currentHost}%3a${currentDefaultPort}%3fsecurity%3dtls%26encryption%3dnone%26fp%3Dchrome%26host%3d${currentHost}%26headerType%3dnone%26type%3dtcp${tlsInsecureParamEncode}${tlsPinnedParamEncode}%23${email}\n"
         fi
 
     elif [[ "${type}" == "trojanTCPXTLS" ]]; then
