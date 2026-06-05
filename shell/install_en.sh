@@ -267,6 +267,12 @@ initVar() {
     # hysteria uplink speed
     hysteriaClientUploadSpeed=
 
+    # Self-signed cert SHA256 fingerprint (for pinnedPeerCertSha256)
+    # Xray 2025.6+ deprecated allowInsecure; self-signed certs must use pinnedPeerCertSha256
+    isSelfSignedCert=false
+    currentCertSha256=
+    currentCertSha256Std=
+
     #Reality
     realityPrivateKey=
     realityServerNames=
@@ -3857,6 +3863,36 @@ customCDNIP() {
         ;;
     esac
 }
+# Initialize TLS certificate SHA256 fingerprint
+# Xray 2025.6.01+ deprecated allowInsecure; use pinnedPeerCertSha256 for cert pinning.
+# Fingerprint is computed for ALL cert types (CA-signed and self-signed) so clients
+# never need manual configuration. Re-generate subscriptions after cert renewal.
+# isSelfSignedCert is kept only for ClashMeta skip-cert-verify decision.
+initCertSha256() {
+    local certFile="/etc/v2ray-agent/tls/${currentHost}.crt"
+    isSelfSignedCert=false
+    currentCertSha256=
+    currentCertSha256Std=
+    if [[ ! -f "${certFile}" ]]; then
+        return
+    fi
+    # Compute fingerprint for all certs: standard Base64 (sing-box JSON) and URL-safe Base64 (xray URLs)
+    currentCertSha256Std=$(openssl x509 -in "${certFile}" -outform DER 2>/dev/null \
+        | openssl dgst -sha256 -binary 2>/dev/null \
+        | base64 -w 0)
+    currentCertSha256=$(echo "${currentCertSha256Std}" | tr '+/' '-_' | tr -d '=')
+    # Detect self-signed cert (issuer_hash == subject_hash) for ClashMeta skip-cert-verify
+    local issuerHash subjectHash
+    issuerHash=$(openssl x509 -in "${certFile}" -noout -issuer_hash 2>/dev/null)
+    subjectHash=$(openssl x509 -in "${certFile}" -noout -subject_hash 2>/dev/null)
+    if [[ -n "${issuerHash}" && "${issuerHash}" == "${subjectHash}" ]]; then
+        isSelfSignedCert=true
+        echoContent skyBlue " ---> Self-signed cert detected, pinnedPeerCertSha256: ${currentCertSha256}"
+    else
+        echoContent skyBlue " ---> Cert fingerprint computed, pinnedPeerCertSha256: ${currentCertSha256}"
+    fi
+}
+
 # General
 defaultBase64Code() {
     local type=$1
@@ -3866,17 +3902,31 @@ defaultBase64Code() {
     local user=
     user=$(echo "${email}" | awk -F "[-]" '{print $1}')
     port=${currentDefaultPort}
+    # Inject pinnedPeerCertSha256 for all certs (xray 2025.6+ replacement for allowInsecure)
+    # ClashMeta skip-cert-verify is only set for self-signed certs (CA certs verify normally)
+    local tlsPinnedParam=""
+    local tlsPinnedParamEncode=""
+    local singBoxPinnedCertParam=""
+    local clashSkipCertVerify=""
+    if [[ -n "${currentCertSha256}" ]]; then
+        tlsPinnedParam="&pinnedPeerCertSha256=${currentCertSha256}"
+        tlsPinnedParamEncode="%26pinnedPeerCertSha256=${currentCertSha256}"
+        singBoxPinnedCertParam=",\"pinned_peer_certificate_chain_sha256\":[\"${currentCertSha256Std}\"]"
+        if [[ "${isSelfSignedCert}" == "true" ]]; then
+            clashSkipCertVerify="    skip-cert-verify: true"
+        fi
+    fi
 
     if [[ "${type}" == "vlesstcp" ]]; then
 
         if [[ "${coreInstallType}" == "1" ]] && echo "${currentInstallProtocolType}" | grep -q 0; then
             echoContent yellow " ---> Universal format (VLESS+TCP+TLS_Vision)"
-            echoContent green " vless://${id}@${currentHost}:${currentDefaultPort}?encryption=none&security=tls&fp=chrome&type=tcp&host=${currentHost}&headerType=none&sni=${currentHost}&flow=xtls-rprx- vision#${email}\n"
+            echoContent green " vless://${id}@${currentHost}:${currentDefaultPort}?encryption=none&security=tls&fp=chrome&type=tcp&host=${currentHost}&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision${tlsPinnedParam}#${email}\n"
 
             echoContent yellow " ---> Formatted plain text (VLESS+TCP+TLS_Vision)"
             echoContent green "Protocol type: VLESS, address: ${currentHost}, port: ${currentDefaultPort}, user ID: ${id}, security: tls, client-fingerprint: chrome, transmission method: tcp, flow: xtls-rprx -vision, account name:${email}\n"
             cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
-vless://${id}@${currentHost}:${currentDefaultPort}?encryption=none&security=tls&type=tcp&host=${currentHost}&fp=chrome&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision#${email}
+vless://${id}@${currentHost}:${currentDefaultPort}?encryption=none&security=tls&type=tcp&host=${currentHost}&fp=chrome&headerType=none&sni=${currentHost}&flow=xtls-rprx-vision${tlsPinnedParam}#${email}
 EOF
             cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
   - name: "${email}"
@@ -3889,21 +3939,22 @@ EOF
     udp: true
     flow: xtls-rprx-vision
     client-fingerprint: chrome
+${clashSkipCertVerify}
 EOF
             echoContent yellow " ---> QR code VLESS(VLESS+TCP+TLS_Vision)"
-            echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3A%2F%2F${id}%40${currentHost}%3A${currentDefaultPort}%3Fencryption%3Dnone%26fp%3Dchrome%26security%3Dtls%26type%3Dtcp%26${currentHost}%3D${currentHost}%26headerType%3Dnone%26sni%3D${currentHost}%26flow%3Dxtls-rprx-vision%23${email}\n"
+            echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3A%2F%2F${id}%40${currentHost}%3A${currentDefaultPort}%3Fencryption%3Dnone%26fp%3Dchrome%26security%3Dtls%26type%3Dtcp%26${currentHost}%3D${currentHost}%26headerType%3Dnone%26sni%3D${currentHost}%26flow%3Dxtls-rprx-vision${tlsPinnedParamEncode}%23${email}\n"
         elif [[ "${coreInstallType}" == 2 ]]; then
             echoContent yellow " ---> Universal format (VLESS+TCP+TLS)"
-            echoContent green "    vless://${id}@${currentHost}:${currentDefaultPort}?security=tls&encryption=none&host=${currentHost}&fp=chrome&headerType=none&type=tcp#${email}\n"
+            echoContent green "    vless://${id}@${currentHost}:${currentDefaultPort}?security=tls&encryption=none&host=${currentHost}&fp=chrome&headerType=none&type=tcp${tlsPinnedParam}#${email}\n"
 
             echoContent yellow " ---> Formatted plain text (VLESS+TCP+TLS)"
             echoContent green "Protocol type: VLESS, address: ${currentHost}, port: ${currentDefaultPort}, user ID: ${id}, security: tls, client-fingerprint: chrome, transmission method: tcp, account name: ${email}\n"
 
             cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
-vless://${id}@${currentHost}:${currentDefaultPort}?security=tls&encryption=none&host=${currentHost}&fp=chrome&headerType=none&type=tcp#${email}
+vless://${id}@${currentHost}:${currentDefaultPort}?security=tls&encryption=none&host=${currentHost}&fp=chrome&headerType=none&type=tcp${tlsPinnedParam}#${email}
 EOF
             echoContent yellow " ---> QR code VLESS(VLESS+TCP+TLS)"
-            echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3a%2f%2f${id}%40${currentHost}%3a${currentDefaultPort}%3fsecurity%3dtls%26encryption%3dnone%26fp%3Dchrome%26host%3d${currentHost}%26headerType%3dnone%26type%3dtcp%23${email}\n"
+            echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vless%3a%2f%2f${id}%40${currentHost}%3a${currentDefaultPort}%3fsecurity%3dtls%26encryption%3dnone%26fp%3Dchrome%26host%3d${currentHost}%26headerType%3dnone%26type%3dtcp${tlsPinnedParamEncode}%23${email}\n"
         fi
 
     elif [[ "${type}" == "trojanTCPXTLS" ]]; then
@@ -4013,10 +4064,10 @@ EOF
     elif [[ "${type}" == "trojan" ]]; then
         # URLEncode
         echoContent yellow " ---> Trojan(TLS)"
-        echoContent green "    trojan://${id}@${currentHost}:${currentDefaultPort}?peer=${currentHost}&fp=chrome&sni=${currentHost}&alpn=http/1.1#${currentHost}_Trojan\n"
+        echoContent green "    trojan://${id}@${currentHost}:${currentDefaultPort}?peer=${currentHost}&fp=chrome&sni=${currentHost}&alpn=http/1.1${tlsPinnedParam}#${currentHost}_Trojan\n"
 
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
-trojan://${id}@${currentHost}:${currentDefaultPort}?peer=${currentHost}&fp=chrome&sni=${currentHost}&alpn=http/1.1#${email}_Trojan
+trojan://${id}@${currentHost}:${currentDefaultPort}?peer=${currentHost}&fp=chrome&sni=${currentHost}&alpn=http/1.1${tlsPinnedParam}#${email}_Trojan
 EOF
 
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
@@ -4028,9 +4079,10 @@ EOF
     client-fingerprint: chrome
     udp: true
     sni: ${currentHost}
+${clashSkipCertVerify}
 EOF
         echoContent yellow " ---> QR code Trojan(TLS)"
-        echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=trojan%3a%2f%2f${id}%40${currentHost}%3a${port}%3fpeer%3d${currentHost}%26fp%3Dchrome%26sni%3d${currentHost}%26alpn%3Dhttp/1.1%23${email}\n"
+        echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=trojan%3a%2f%2f${id}%40${currentHost}%3a${port}%3fpeer%3d${currentHost}%26fp%3Dchrome%26sni%3d${currentHost}%26alpn%3Dhttp/1.1${tlsPinnedParamEncode}%23${email}\n"
 
     elif [[ "${type}" == "trojangrpc" ]]; then
         # URLEncode
@@ -4067,9 +4119,9 @@ EOF
             clashMetaPortTmp="ports: ${portHoppingStart}-${portHoppingEnd}"
             v2rayNPortHopping=",${portHoppingStart}-${portHoppingEnd}"
         fi
-        echoContent green "    hysteria://${currentHost}:${hysteriaPort}?${mport}protocol=${hysteriaProtocol}&auth=${id}&peer=${currentHost}&insecure=0&alpn=h3&upmbps=${hysteriaClientUploadSpeed}&downmbps=${hysteriaClientDownloadSpeed}#${hysteriaEmail}\n"
+        echoContent green "    hysteria://${currentHost}:${hysteriaPort}?${mport}protocol=${hysteriaProtocol}&auth=${id}&peer=${currentHost}&insecure=0&alpn=h3&upmbps=${hysteriaClientUploadSpeed}&downmbps=${hysteriaClientDownloadSpeed}${tlsPinnedParam}#${hysteriaEmail}\n"
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
-hysteria://${currentHost}:${hysteriaPort}?${mport}protocol=${hysteriaProtocol}&auth=${id}&peer=${currentHost}&insecure=0&alpn=h3&upmbps=${hysteriaClientUploadSpeed}&downmbps=${hysteriaClientDownloadSpeed}#${hysteriaEmail}
+hysteria://${currentHost}:${hysteriaPort}?${mport}protocol=${hysteriaProtocol}&auth=${id}&peer=${currentHost}&insecure=0&alpn=h3&upmbps=${hysteriaClientUploadSpeed}&downmbps=${hysteriaClientDownloadSpeed}${tlsPinnedParam}#${hysteriaEmail}
 EOF
         echoContent yellow " ---> v2rayN(hysteria+TLS)"
         cat <<EOF >"/etc/v2ray-agent/hysteria/conf/client.json"
@@ -4116,12 +4168,13 @@ EOF
     up: "${hysteriaClientUploadSpeed}"
     down: "${hysteriaClientDownloadSpeed}"
     sni: ${currentHost}
+${clashSkipCertVerify}
 EOF
         echoContent yellow " ---> QR code Hysteria(TLS)"
         if [[ -n "${mport}" ]]; then
             mport="mport%3D${portHoppingStart}-${portHoppingEnd}%26"
         fi
-        echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=hysteria%3A%2F%2F${currentHost}%3A${hysteriaPort}%3F${mport}protocol%3D${hysteriaProtocol}%26auth%3D${id}%26peer%3D${currentHost}%26insecure%3D0%26alpn%3Dh3%26upmbps%3D${hysteriaClientUploadSpeed}%26downmbps%3D${hysteriaClientDownloadSpeed}%23${hysteriaEmail}\n"
+        echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=hysteria%3A%2F%2F${currentHost}%3A${hysteriaPort}%3F${mport}protocol%3D${hysteriaProtocol}%26auth%3D${id}%26peer%3D${currentHost}%26insecure%3D0%26alpn%3Dh3%26upmbps%3D${hysteriaClientUploadSpeed}%26downmbps%3D${hysteriaClientDownloadSpeed}${tlsPinnedParamEncode}%23${hysteriaEmail}\n"
     elif [[ "${type}" == "vlessReality" ]]; then
         echoContent yellow " ---> Universal format (VLESS+reality+uTLS+Vision)"
         echoContent green "    vless://${id}@$(getPublicIP):${currentRealityPort}?encryption=none&security=reality&type=tcp&sni=${currentRealityServerNames}&fp=chrome&pbk=${currentRealityPublicKey}&sid=6ba85179e30d4fc2&flow=xtls-rprx-vision#${email}\n"
@@ -4229,6 +4282,7 @@ EOF
     ip-version: dual
     smux:
         enabled: false
+${clashSkipCertVerify}
 EOF
     fi
 
@@ -4243,6 +4297,7 @@ showAccounts() {
     readXrayCoreRealityConfig
     readHysteriaPortHopping
     readTuicConfig
+    initCertSha256
     echo
     echoContent skyBlue "\nProgress$1/${totalProgress}: account"
     local show
